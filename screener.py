@@ -33,7 +33,6 @@ UA = {
     "Accept-Language": "ja,en;q=0.8",
 }
 JPX_PAGE_URL = "https://www.jpx.co.jp/markets/statistics-equities/misc/01.html"
-LOCAL_XLS = ROOT / "data_j.xls"   # 手動で置いた一覧ファイル(予備)
 
 
 def _download(url: str) -> bytes:
@@ -53,39 +52,79 @@ def _jpx_xls() -> bytes:
     except Exception as e:  # noqa: BLE001
         print(f"  直接取得に失敗: {e}")
     html = _download(JPX_PAGE_URL).decode("utf-8", "ignore")
-    m = re.search(r'href="([^"]+data_j\.xls)"', html)
+    m = re.search(r'href="([^"]+\.xlsx?)"', html)
     if not m:
-        raise RuntimeError("掲載ページに data_j.xls のリンクが見つかりません")
+        raise RuntimeError("掲載ページに一覧ファイルのリンクが見つかりません")
     link = m.group(1)
     if link.startswith("/"):
         link = "https://www.jpx.co.jp" + link
     return _download(link)
 
 
+def _col(df: pd.DataFrame, *words: str) -> str:
+    """列名のゆれに対応: words を全部含む列名を返す。"""
+    for c in df.columns:
+        if all(w in str(c) for w in words):
+            return c
+    raise KeyError(f"列が見つかりません: {words} / 実際の列: {list(df.columns)}")
+
+
 def _parse_jpx(df: pd.DataFrame) -> pd.DataFrame:
-    df = df[df["市場・商品区分"].str.contains("内国株式", na=False)].copy()
-    df["market"] = (
-        df["市場・商品区分"]
-        .str.replace("（内国株式）", "", regex=False)
-        .str.replace("(内国株式)", "", regex=False)
-    )
-    return pd.DataFrame(
+    df = df.astype(str)
+    code, name = _col(df, "コード"), _col(df, "銘柄名")
+    mkt = _col(df, "市場")
+    try:
+        sec = _col(df, "33業種", "区分")
+    except KeyError:
+        sec = _col(df, "業種")
+    df = df[df[mkt].str.contains("内国株式|プライム|スタンダード|グロース", na=False)]
+    df = df[~df[mkt].str.contains("ETF|REIT|外国|PRO", na=False)].copy()
+    market = df[mkt].str.extract(r"(プライム|スタンダード|グロース)")[0]
+    out = pd.DataFrame(
         {
-            "code": df["コード"].str.strip(),
-            "name": df["銘柄名"].str.strip(),
-            "market": df["market"].str.strip(),
-            "sector": df["33業種区分"].str.strip(),
+            "code": df[code].str.strip().str.replace(r"\.0$", "", regex=True),
+            "name": df[name].str.strip(),
+            "market": market,
+            "sector": df[sec].str.strip(),
         }
     )
+    return out.dropna(subset=["market"])
+
+
+def _read_any(path: Path) -> pd.DataFrame:
+    if path.suffix.lower() == ".csv":
+        for enc in ("utf-8-sig", "cp932"):
+            try:
+                return pd.read_csv(path, dtype=str, encoding=enc)
+            except UnicodeDecodeError:
+                continue
+    return pd.read_excel(path, dtype=str)
+
+
+def _local_list() -> pd.DataFrame:
+    """リポジトリに手動で置いた一覧ファイル(xls / xlsx / csv、tickers.csv以外)を探す。"""
+    files = [
+        p for p in ROOT.iterdir()
+        if p.suffix.lower() in (".xls", ".xlsx", ".csv") and p.name != TICKERS_CSV.name
+    ]
+    if not files:
+        raise FileNotFoundError("一覧ファイル(xls/xlsx/csv)がリポジトリにありません")
+    errors = []
+    for p in sorted(files, key=lambda x: x.stat().st_mtime, reverse=True):
+        try:
+            return _read_any(p)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{p.name}: {e}")
+    raise RuntimeError(" / ".join(errors))
 
 
 def load_tickers() -> pd.DataFrame:
-    """銘柄一覧を ①JPXサイト ②リポジトリに置いた data_j.xls ③前回の tickers.csv の順で取得。"""
+    """銘柄一覧を ①リポジトリに置いた一覧ファイル ②JPXサイト ③前回の tickers.csv の順で取得。"""
     import io
 
     sources = [
+        ("リポジトリの一覧ファイル", _local_list),
         ("JPXサイト", lambda: pd.read_excel(io.BytesIO(_jpx_xls()), dtype=str)),
-        ("data_j.xls", lambda: pd.read_excel(LOCAL_XLS, dtype=str)),
     ]
     for label, fn in sources:
         try:
@@ -101,7 +140,7 @@ def load_tickers() -> pd.DataFrame:
         print("前回保存した tickers.csv を使います。")
         return pd.read_csv(TICKERS_CSV, dtype=str)
     sys.exit(
-        "銘柄一覧を取得できませんでした。JPXサイトから data_j.xls をダウンロードして"
+        "銘柄一覧を取得できませんでした。JPXの上場銘柄一覧ファイル(xls/xlsx/csv)を"
         "リポジトリに置いてください。"
     )
 
