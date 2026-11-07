@@ -8,11 +8,20 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -26,10 +35,20 @@ jobs:
       - name: データ作成
         run: python screener.py
 
-      - name: 結果を保存
+      - name: 公開用ファイルをまとめる
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: GitHub Pages に公開
+        id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: 実行記録を保存(自動実行が止まらないようにするため)
         run: |
+          date +'%Y-%m-%d %H:%M' > last_run.txt
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git add data.json tickers.csv
-          git diff --cached --quiet || git commit -m "データ更新 $(date +'%Y-%m-%d')"
+          git add last_run.txt tickers.csv
+          git diff --cached --quiet || git commit -m "実行記録 $(date +'%Y-%m-%d')"
           git push
