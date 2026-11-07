@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="スクリーナー">
+<meta name="theme-color" content="#0f1115">
+<link rel="apple-touch-icon" href="icon.png">
+<title>スイング・スクリーナー</title>
+<style>
+:root{
+  --bg:#0f1115; --card:#181b22; --line:#262a33; --text:#e8eaef; --sub:#9097a5;
+  --accent:#4f8cff; --up:#ff5a5f; --down:#3fb37f; --chip:#222733; --warn:#e8b04a;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);
+  font:15px/1.45 -apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif}
+header{position:sticky;top:0;z-index:5;background:rgba(15,17,21,.94);backdrop-filter:blur(10px);
+  padding:calc(env(safe-area-inset-top) + 10px) 14px 10px;border-bottom:1px solid var(--line)}
+h1{font-size:17px;margin:0;display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+h1 small{font-size:12px;color:var(--sub);font-weight:400}
+.chips{display:flex;gap:6px;overflow-x:auto;margin-top:10px;padding-bottom:2px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;border:1px solid var(--line);background:var(--chip);color:var(--text);
+  border-radius:999px;padding:6px 12px;font-size:13px}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+main{padding:12px 12px calc(env(safe-area-inset-bottom) + 24px)}
+details.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:12px}
+details.panel>summary{list-style:none;padding:12px 14px;font-weight:600;display:flex;justify-content:space-between}
+details.panel>summary::-webkit-details-marker{display:none}
+details.panel>summary::after{content:"＋";color:var(--sub)}
+details.panel[open]>summary::after{content:"－"}
+.body{padding:0 14px 14px}
+.grp{border-top:1px solid var(--line);padding:10px 0}
+.grp:first-child{border-top:0;padding-top:0}
+.grp h3{font-size:12px;color:var(--sub);margin:0 0 8px;font-weight:600}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 0}
+.row label{flex:1;font-size:14px}
+.range{display:flex;align-items:center;gap:6px}
+input[type=number],select{background:#0f1115;color:var(--text);border:1px solid var(--line);
+  border-radius:8px;padding:7px 8px;font-size:16px;width:84px;text-align:right}
+select{width:auto;text-align:left}
+.tg{display:flex;flex-wrap:wrap;gap:6px}
+.tg button{border:1px solid var(--line);background:var(--chip);color:var(--text);border-radius:8px;
+  padding:7px 10px;font-size:13px}
+.tg button.on{background:rgba(79,140,255,.18);border-color:var(--accent);color:#cfe0ff}
+.note{font-size:12px;color:var(--sub);margin:4px 0 0}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:4px 2px 10px;font-size:13px;color:var(--sub)}
+.bar b{color:var(--text);font-size:15px}
+.bar .r{display:flex;gap:6px;align-items:center}
+.bar select{font-size:14px;padding:5px 6px}
+.iconbtn{border:1px solid var(--line);background:var(--chip);color:var(--text);border-radius:8px;padding:5px 9px;font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.nm{font-weight:600;font-size:15px;line-height:1.3}
+.cd{color:var(--sub);font-size:12px;font-weight:400}
+.px{text-align:right;white-space:nowrap}
+.px b{font-size:16px}
+.pos{color:var(--up)} .neg{color:var(--down)}
+.mets{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:8px}
+.m{background:#12151b;border-radius:8px;padding:4px 6px}
+.m span{display:block;font-size:10.5px;color:var(--sub)}
+.m b{font-size:13px;font-weight:600}
+.tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.tag{font-size:11px;padding:2px 7px;border-radius:999px;background:#232838;color:#bcc6dc}
+.tag.hot{background:rgba(255,90,95,.15);color:#ff9a9d}
+.links{display:none;gap:8px;margin-top:8px}
+.card.open .links{display:flex}
+.links a{flex:1;text-align:center;text-decoration:none;color:#cfe0ff;background:#1f2533;border-radius:8px;padding:8px 4px;font-size:13px}
+.star{background:none;border:0;font-size:20px;color:#555c6b;padding:0 0 0 6px;line-height:1}
+.star.on{color:var(--warn)}
+.more{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--text);font-size:14px}
+.msg{text-align:center;color:var(--sub);padding:40px 10px}
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 20px);transform:translateX(-50%);
+  background:#2b3140;color:#fff;padding:8px 14px;border-radius:999px;font-size:13px;opacity:0;transition:.2s;pointer-events:none}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>スイング・スクリーナー <small id="dt">読み込み中…</small></h1>
+  <div class="chips" id="presets"></div>
+</header>
+
+<main>
+  <details class="panel" id="panel">
+    <summary>条件を設定</summary>
+    <div class="body" id="form"></div>
+  </details>
+
+  <div class="bar">
+    <div><b id="cnt">0</b> 銘柄</div>
+    <div class="r">
+      <select id="sort">
+        <option value="vr">出来高倍率</option>
+        <option value="chg">前日比</option>
+        <option value="tv20">売買代金</option>
+        <option value="d25">25日線乖離</option>
+        <option value="rsi">RSI</option>
+        <option value="f52">52週高値に近い</option>
+        <option value="code">コード</option>
+      </select>
+      <button class="iconbtn" id="dir" aria-label="並び順">↓</button>
+      <button class="iconbtn" id="copy" aria-label="コードをコピー">コピー</button>
+    </div>
+  </div>
+  <div id="list"></div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+// ---------- 条件の定義 ----------
+const DEFAULT = {
+  mkt: ["プライム","スタンダード","グロース"], sec: "",
+  pmin: "", pmax: "", tvmin: 1, chgmin: "", chgmax: "", vrmin: "",
+  d25min: "", d25max: "", rsimin: "", rsimax: "", f52: "",
+  a5:false, up25:false, a75:false, po:false, h20:false, h52:false, star:false,
+  sort: "vr", desc: true
+};
+const PRESETS = [
+  {id:"vol",  name:"出来高急増",   set:{vrmin:2, chgmin:0, sort:"vr"}},
+  {id:"trend",name:"上昇トレンド", set:{po:true, up25:true, sort:"tv20"}},
+  {id:"dip",  name:"押し目",       set:{up25:true, a75:true, d25min:-3, d25max:2, sort:"d25", desc:false}},
+  {id:"brk",  name:"52週高値更新", set:{h52:true, vrmin:1.5, sort:"vr"}},
+  {id:"brk20",name:"20日高値更新", set:{h20:true, up25:true, sort:"vr"}},
+  {id:"star", name:"★ 監視",       set:{star:true, tvmin:"", sort:"code", desc:false}},
+];
+const TOGGLES = [
+  ["a5","5日線より上"],["up25","25日線が上向き"],["a75","75日線より上"],
+  ["po","パーフェクトオーダー"],["h20","20日高値更新"],["h52","52週高値更新"],["star","★監視のみ"]
+];
+
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+};
+let S = Object.assign({}, DEFAULT, store.get("cond", {}));
+let stars = new Set(store.get("stars", []));
+let preset = store.get("preset", "");
+let DATA = [], shown = 0, filtered = [];
+const PAGE = 100;
+const $ = id => document.getElementById(id);
+
+// ---------- 画面 ----------
+function buildPresets(){
+  $("presets").innerHTML = PRESETS.map(p =>
+    `<button class="chip ${preset===p.id?"on":""}" data-p="${p.id}">${p.name}</button>`).join("")
+    + `<button class="chip" data-p="reset">リセット</button>`;
+  $("presets").onclick = e => {
+    const id = e.target.dataset.p; if(!id) return;
+    if(id==="reset" || id===preset){ S = Object.assign({}, DEFAULT); preset = ""; }
+    else { const p = PRESETS.find(x=>x.id===id); S = Object.assign({}, DEFAULT, p.set); preset = id; }
+    buildPresets(); buildForm(); run();
+  };
+}
+
+function num(key, label, unit, step){
+  return `<div class="row"><label>${label}</label><div class="range">
+    <input type="number" inputmode="decimal" step="${step||"any"}" data-k="${key}" value="${S[key]}">${unit||""}</div></div>`;
+}
+function rng(kmin, kmax, label, unit){
+  return `<div class="row"><label>${label}</label><div class="range">
+    <input type="number" inputmode="decimal" data-k="${kmin}" value="${S[kmin]}" placeholder="下限">〜
+    <input type="number" inputmode="decimal" data-k="${kmax}" value="${S[kmax]}" placeholder="上限">${unit||""}</div></div>`;
+}
+function buildForm(){
+  const secs = [...new Set(DATA.map(r=>r.sec))].filter(Boolean).sort();
+  $("form").innerHTML = `
+  <div class="grp"><h3>市場・業種</h3>
+    <div class="tg" id="mkts">${["プライム","スタンダード","グロース"].map(m=>
+      `<button data-m="${m}" class="${S.mkt.includes(m)?"on":""}">${m}</button>`).join("")}</div>
+    <div class="row"><label>業種</label><select data-k="sec"><option value="">すべて</option>${
+      secs.map(s=>`<option ${S.sec===s?"selected":""}>${s}</option>`).join("")}</select></div>
+  </div>
+  <div class="grp"><h3>株価・流動性</h3>
+    ${rng("pmin","pmax","株価","円")}
+    ${num("tvmin","売買代金(20日平均)","億円以上")}
+    <p class="note">流動性の低い銘柄を外すため、初期値は1億円以上にしています。</p>
+  </div>
+  <div class="grp"><h3>前日の値動き</h3>
+    ${rng("chgmin","chgmax","前日比","%")}
+    ${num("vrmin","出来高倍率(20日平均比)","倍以上")}
+  </div>
+  <div class="grp"><h3>トレンド・位置</h3>
+    <div class="tg" id="tgs">${TOGGLES.map(([k,l])=>
+      `<button data-t="${k}" class="${S[k]?"on":""}">${l}</button>`).join("")}</div>
+    ${rng("d25min","d25max","25日線からの乖離","%")}
+    ${num("f52","52週高値から","%以内")}
+    ${rng("rsimin","rsimax","RSI(14日)","")}
+  </div>`;
+  $("form").querySelectorAll("[data-k]").forEach(el => {
+    el.addEventListener(el.tagName==="SELECT" ? "change" : "input", () => {
+      S[el.dataset.k] = el.value; preset = ""; buildPresets(); run();
+    });
+  });
+  $("mkts").onclick = e => {
+    const m = e.target.dataset.m; if(!m) return;
+    S.mkt = S.mkt.includes(m) ? S.mkt.filter(x=>x!==m) : [...S.mkt, m];
+    e.target.classList.toggle("on"); preset=""; buildPresets(); run();
+  };
+  $("tgs").onclick = e => {
+    const k = e.target.dataset.t; if(!k) return;
+    S[k] = !S[k]; e.target.classList.toggle("on"); preset=""; buildPresets(); run();
+  };
+}
+
+// ---------- 絞り込み ----------
+const has = v => v !== "" && v !== null && v !== undefined && !isNaN(parseFloat(v));
+const f = v => parseFloat(v);
+function pass(r){
+  if(!S.mkt.some(m => (r.mkt||"").includes(m))) return false;
+  if(S.sec && r.sec !== S.sec) return false;
+  if(has(S.pmin) && r.price < f(S.pmin)) return false;
+  if(has(S.pmax) && r.price > f(S.pmax)) return false;
+  if(has(S.tvmin) && !(r.tv20 >= f(S.tvmin))) return false;
+  if(has(S.chgmin) && !(r.chg >= f(S.chgmin))) return false;
+  if(has(S.chgmax) && !(r.chg <= f(S.chgmax))) return false;
+  if(has(S.vrmin) && !(r.vr >= f(S.vrmin))) return false;
+  if(has(S.d25min) && !(r.d25 >= f(S.d25min))) return false;
+  if(has(S.d25max) && !(r.d25 <= f(S.d25max))) return false;
+  if(has(S.rsimin) && !(r.rsi >= f(S.rsimin))) return false;
+  if(has(S.rsimax) && !(r.rsi <= f(S.rsimax))) return false;
+  if(has(S.f52) && !(r.f52 >= -Math.abs(f(S.f52)))) return false;
+  if(S.a5 && !r.a5) return false;
+  if(S.up25 && !r.up25) return false;
+  if(S.a75 && !(r.d75 > 0)) return false;
+  if(S.po && !r.po) return false;
+  if(S.h20 && !r.h20) return false;
+  if(S.h52 && !r.h52) return false;
+  if(S.star && !stars.has(r.code)) return false;
+  return true;
+}
+function run(){
+  store.set("cond", S); store.set("preset", preset);
+  $("sort").value = S.sort; $("dir").textContent = S.desc ? "↓" : "↑";
+  const k = S.sort, d = S.desc ? -1 : 1;
+  filtered = DATA.filter(pass).sort((a,b)=>{
+    const x = a[k], y = b[k];
+    if(x===null||x===undefined) return 1; if(y===null||y===undefined) return -1;
+    return (x > y ? 1 : x < y ? -1 : 0) * d;
+  });
+  $("cnt").textContent = filtered.length.toLocaleString();
+  shown = 0; $("list").innerHTML = ""; more();
+}
+
+// ---------- 表示 ----------
+const fx = (v, nd=1, sfx="") => v===null||v===undefined ? "—" : (+v).toFixed(nd) + sfx;
+const sg = v => v===null||v===undefined ? "" : v > 0 ? "pos" : v < 0 ? "neg" : "";
+function card(r){
+  const tags = [];
+  if(r.h52) tags.push(`<span class="tag hot">52週高値</span>`);
+  else if(r.h20) tags.push(`<span class="tag hot">20日高値</span>`);
+  if(r.po) tags.push(`<span class="tag">PO</span>`);
+  if(r.up25) tags.push(`<span class="tag">25日線↑</span>`);
+  if(r.vr >= 2) tags.push(`<span class="tag hot">出来高${fx(r.vr,1)}倍</span>`);
+  tags.push(`<span class="tag">${r.mkt}</span>`);
+  if(r.sec) tags.push(`<span class="tag">${r.sec}</span>`);
+  return `<div class="card" data-c="${r.code}">
+    <div class="top">
+      <div class="nm">${r.name}<br><span class="cd">${r.code}</span></div>
+      <div style="display:flex;align-items:flex-start">
+        <div class="px"><b>${(+r.price).toLocaleString()}</b><br><span class="${sg(r.chg)}">${r.chg>0?"+":""}${fx(r.chg,2,"%")}</span></div>
+        <button class="star ${stars.has(r.code)?"on":""}" data-s="${r.code}" aria-label="監視">★</button>
+      </div>
+    </div>
+    <div class="mets">
+      <div class="m"><span>出来高倍率</span><b>${fx(r.vr,2)}</b></div>
+      <div class="m"><span>売買代金</span><b>${fx(r.tv,1)}億</b></div>
+      <div class="m"><span>25日乖離</span><b class="${sg(r.d25)}">${fx(r.d25,1,"%")}</b></div>
+      <div class="m"><span>RSI</span><b>${fx(r.rsi,0)}</b></div>
+    </div>
+    <div class="tags">${tags.join("")}</div>
+    <div class="links">
+      <a href="https://kabutan.jp/stock/chart?code=${r.code}" target="_blank" rel="noopener">株探チャート</a>
+      <a href="https://finance.yahoo.co.jp/quote/${r.code}.T/chart" target="_blank" rel="noopener">Yahoo!</a>
+    </div>
+  </div>`;
+}
+function more(){
+  const part = filtered.slice(shown, shown + PAGE);
+  shown += part.length;
+  const old = $("moreBtn"); if(old) old.remove();
+  if(!filtered.length){ $("list").innerHTML = `<div class="msg">条件に合う銘柄がありません</div>`; return; }
+  $("list").insertAdjacentHTML("beforeend", part.map(card).join(""));
+  if(shown < filtered.length)
+    $("list").insertAdjacentHTML("beforeend", `<button class="more" id="moreBtn">さらに表示(残り${filtered.length-shown})</button>`);
+}
+$("list").addEventListener("click", e => {
+  if(e.target.id === "moreBtn") return more();
+  const s = e.target.dataset.s;
+  if(s){
+    stars.has(s) ? stars.delete(s) : stars.add(s);
+    store.set("stars", [...stars]); e.target.classList.toggle("on");
+    toast(stars.has(s) ? "監視に追加" : "監視から外しました"); return;
+  }
+  if(e.target.closest("a")) return;
+  const c = e.target.closest(".card"); if(c) c.classList.toggle("open");
+});
+$("sort").onchange = e => { S.sort = e.target.value; run(); };
+$("dir").onclick = () => { S.desc = !S.desc; run(); };
+$("copy").onclick = async () => {
+  const txt = filtered.slice(0, 200).map(r => r.code).join("\n");
+  try{ await navigator.clipboard.writeText(txt); toast(`${Math.min(filtered.length,200)}銘柄のコードをコピー`); }
+  catch(e){ toast("コピーできませんでした"); }
+};
+function toast(t){ const el=$("toast"); el.textContent=t; el.classList.add("show"); clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove("show"),1600); }
+
+// ---------- 読み込み ----------
+fetch("data.json?" + Date.now()).then(r => r.json()).then(j => {
+  DATA = j.rows.map(a => Object.fromEntries(j.keys.map((k,i)=>[k,a[i]])));
+  $("dt").textContent = `${j.date} 終値 ・ ${j.count.toLocaleString()}銘柄`;
+  buildPresets(); buildForm(); run();
+}).catch(() => {
+  $("dt").textContent = "";
+  $("list").innerHTML = `<div class="msg">データがまだありません。<br>GitHubの「Actions」で更新を実行してください。</div>`;
+});
+</script>
+</body>
+</html>
