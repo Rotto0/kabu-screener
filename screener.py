@@ -1,8 +1,10 @@
 """
 日本株スクリーナー用データ作成スクリプト
 - 東証の全上場銘柄(プライム/スタンダード/グロース)の日足を Yahoo Finance から取得
-- スイング向けの指標を計算して data.json に保存
-GitHub Actions で平日の夕方に自動実行される想定。
+- スイング向けの指標とチャート分析を計算して site/ に出力
+  site/data.json      … スクリーニング用(全銘柄)
+  site/c/<コード>.json … チャート用(日足・週足・月足と分析結果)
+GitHub Actions で平日の夕方に自動実行され、site/ が GitHub Pages に公開される。
 """
 import json
 import math
@@ -11,19 +13,25 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+import shutil
+
 import numpy as np
 import pandas as pd
 
+import analysis
+
 ROOT = Path(__file__).parent
 TICKERS_CSV = ROOT / "tickers.csv"
-DATA_JSON = ROOT / "data.json"
+SITE = ROOT / "site"
+DATA_JSON = SITE / "data.json"
 JPX_LIST_URL = (
     "https://www.jpx.co.jp/markets/statistics-equities/misc/"
     "tvdivq0000001vg2-att/data_j.xls"
 )
 JST = timezone(timedelta(hours=9))
-BATCH = 150          # 1回にまとめて取得する銘柄数
-HISTORY = "14mo"     # 52週高値を出すために1年強の履歴を取る
+BATCH = 100          # 1回にまとめて取得する銘柄数
+HISTORY = "5y"       # 月足チャート用に5年分取る
+KEEP = {"d": 370, "w": 260, "m": 60}  # チャートに載せる本数(日足約1年半・週足5年・月足5年)
 
 
 # ---------------------------------------------------------------- 銘柄一覧
@@ -232,16 +240,42 @@ def calc(d: pd.DataFrame) -> dict | None:
     }
 
 
+def _rows(df: pd.DataFrame, n: int) -> list:
+    df = df.tail(n)
+    return [
+        [int(i.strftime("%Y%m%d")), r(o, 1), r(h, 1), r(l, 1), r(c, 1), int(v)]
+        for i, o, h, l, c, v in zip(df.index, df["Open"], df["High"], df["Low"], df["Close"], df["Volume"])
+    ]
+
+
 def build(tickers: pd.DataFrame, prices: dict[str, pd.DataFrame]) -> dict:
+    cdir = SITE / "c"
+    cdir.mkdir(parents=True, exist_ok=True)
     rows = []
     for t in tickers.itertuples():
         d = prices.get(t.code)
         if d is None:
             continue
-        m = calc(d)
+        m = calc(d.tail(300))
         if m is None:
             continue
-        rows.append({"code": t.code, "name": t.name, "mkt": t.market, "sec": t.sector, **m})
+        try:
+            frames = {
+                "d": d,
+                "w": analysis.to_weekly_monthly(d, "W-FRI"),
+                "m": analysis.to_weekly_monthly(d, "ME"),
+            }
+            ana = {tf: analysis.analyze(f.tail(analysis.PARAMS[tf]["look"] + 10), tf) for tf, f in frames.items()}
+            flags = analysis.screen_flags(ana["d"], float(d["Close"].iloc[-1]))
+            chart = {tf: _rows(f, KEEP[tf]) for tf, f in frames.items()}
+            chart["a"] = ana
+            (cdir / f"{t.code}.json").write_text(
+                json.dumps(chart, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"  {t.code} の分析でエラー: {e}")
+            flags = {"sup": None, "tlu": None, "fib": False, "pat": ""}
+        rows.append({"code": t.code, "name": t.name, "mkt": t.market, "sec": t.sector, **m, **flags})
     # 一番多い日付を「データ日付」とし、それより古い銘柄(売買停止など)は除外
     latest = pd.Series([x["date"] for x in rows]).mode().iloc[0] if rows else ""
     rows = [x for x in rows if x["date"] == latest]
@@ -266,7 +300,12 @@ def main():
     print(f"株価を取得できた銘柄: {len(prices)}")
     if len(prices) < len(tickers) * 0.5:
         sys.exit("取得できた銘柄が半分未満のため、data.json を更新せずに終了します。")
+    if SITE.exists():
+        shutil.rmtree(SITE)
+    SITE.mkdir()
     out = build(tickers, prices)
+    for f in ("index.html", "icon.png"):
+        shutil.copy(ROOT / f, SITE / f)
     DATA_JSON.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"data.json を保存: {out['date']} / {out['count']}銘柄")
 

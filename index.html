@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="スクリーナー">
 <meta name="theme-color" content="#0f1115">
 <link rel="apple-touch-icon" href="icon.png">
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
 <title>スイング・スクリーナー</title>
 <style>
 :root{
@@ -77,6 +78,31 @@ select{width:auto;text-align:left}
 .toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 20px);transform:translateX(-50%);
   background:#2b3140;color:#fff;padding:8px 14px;border-radius:999px;font-size:13px;opacity:0;transition:.2s;pointer-events:none}
 .toast.show{opacity:1}
+/* チャート画面 */
+#cv{position:fixed;inset:0;z-index:20;background:var(--bg);display:none;flex-direction:column;
+  padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+#cv.show{display:flex}
+.cvh{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line)}
+.cvh .t{flex:1;min-width:0}
+.cvh .t b{font-size:16px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cvh .t span{font-size:12px;color:var(--sub)}
+.x{border:0;background:var(--chip);color:var(--text);border-radius:999px;width:34px;height:34px;font-size:18px}
+.cvbody{flex:1;overflow-y:auto;padding:10px 12px 20px}
+.seg{display:flex;background:var(--chip);border-radius:10px;padding:3px;margin-bottom:8px}
+.seg button{flex:1;border:0;background:none;color:var(--sub);padding:7px;border-radius:8px;font-size:14px}
+.seg button.on{background:var(--accent);color:#fff}
+#chart{height:52vh;min-height:300px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.lg{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.lg button{border:1px solid var(--line);background:var(--chip);color:var(--sub);border-radius:999px;padding:5px 10px;font-size:12px}
+.lg button.on{color:var(--text);border-color:#4a5263}
+.lg i{display:inline-block;width:10px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-top:8px}
+.box h4{margin:0 0 6px;font-size:13px;color:var(--sub);font-weight:600}
+.kv{display:flex;justify-content:space-between;font-size:14px;padding:3px 0;border-top:1px dashed #262a33}
+.kv:first-of-type{border-top:0}
+.kv span{color:var(--sub)}
+.att{font-size:11px;color:var(--sub);margin-top:10px;text-align:center}
+.att a{color:var(--sub)}
 </style>
 </head>
 <body>
@@ -111,12 +137,30 @@ select{width:auto;text-align:left}
 </main>
 <div class="toast" id="toast"></div>
 
+<div id="cv">
+  <div class="cvh">
+    <div class="t"><b id="cvName"></b><span id="cvSub"></span></div>
+    <button class="star" id="cvStar" aria-label="監視">★</button>
+    <button class="x" id="cvClose" aria-label="閉じる">×</button>
+  </div>
+  <div class="cvbody">
+    <div class="seg" id="tf">
+      <button data-tf="d" class="on">日足</button><button data-tf="w">週足</button><button data-tf="m">月足</button>
+    </div>
+    <div id="chart"></div>
+    <div class="lg" id="layers"></div>
+    <div id="cvInfo"></div>
+    <div class="att">チャート: <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView Lightweight Charts</a> ・ 分析は機械的な目安です</div>
+  </div>
+</div>
+
 <script>
 // ---------- 条件の定義 ----------
 const DEFAULT = {
   mkt: ["プライム","スタンダード","グロース"], sec: "",
   pmin: "", pmax: "", tvmin: 1, chgmin: "", chgmax: "", vrmin: "",
   d25min: "", d25max: "", rsimin: "", rsimax: "", f52: "",
+  nsup:false, ntl:false, nfib:false, pat:"",
   a5:false, up25:false, a75:false, po:false, h20:false, h52:false, star:false,
   sort: "vr", desc: true
 };
@@ -126,6 +170,10 @@ const PRESETS = [
   {id:"dip",  name:"押し目",       set:{up25:true, a75:true, d25min:-3, d25max:2, sort:"d25", desc:false}},
   {id:"brk",  name:"52週高値更新", set:{h52:true, vrmin:1.5, sort:"vr"}},
   {id:"brk20",name:"20日高値更新", set:{h20:true, up25:true, sort:"vr"}},
+  {id:"sup",  name:"サポート反発候補", set:{nsup:true, chgmin:0, sort:"tv20"}},
+  {id:"tl",   name:"トレンドライン押し", set:{ntl:true, up25:true, sort:"tv20"}},
+  {id:"fib",  name:"フィボ押し",   set:{nfib:true, up25:true, sort:"tv20"}},
+  {id:"dbl",  name:"ダブルボトム", set:{pat:"ダブルボトム", sort:"vr"}},
   {id:"star", name:"★ 監視",       set:{star:true, tvmin:"", sort:"code", desc:false}},
 ];
 const TOGGLES = [
@@ -133,6 +181,8 @@ const TOGGLES = [
   ["po","パーフェクトオーダー"],["h20","20日高値更新"],["h52","52週高値更新"],["star","★監視のみ"]
 ];
 
+const TOGGLES2 = [["nsup","サポート付近"],["ntl","上昇トレンドライン付近"],["nfib","フィボ押し(38.2〜61.8%)"]];
+const PATS = ["ダブルボトム","ダブルボトム(ブレイク)","ダブルボトム(形成中)","ダブルトップ","三角保ち合い","三角保ち合い(ブレイク)","ボックス","高値・安値切り上げ","高値・安値切り下げ"];
 const store = {
   get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
   set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
@@ -140,7 +190,7 @@ const store = {
 let S = Object.assign({}, DEFAULT, store.get("cond", {}));
 let stars = new Set(store.get("stars", []));
 let preset = store.get("preset", "");
-let DATA = [], shown = 0, filtered = [];
+let DATA = [], shown = 0, filtered = [], DATA_DATE = "";
 const PAGE = 100;
 const $ = id => document.getElementById(id);
 
@@ -190,6 +240,13 @@ function buildForm(){
     ${rng("d25min","d25max","25日線からの乖離","%")}
     ${num("f52","52週高値から","%以内")}
     ${rng("rsimin","rsimax","RSI(14日)","")}
+  </div>
+  <div class="grp"><h3>チャート分析(日足)</h3>
+    <div class="tg" id="tg2">${TOGGLES2.map(([k,l])=>
+      `<button data-t="${k}" class="${S[k]?"on":""}">${l}</button>`).join("")}</div>
+    <div class="row"><label>チャートパターン</label><select data-k="pat"><option value="">指定なし</option>${
+      PATS.map(p=>`<option ${S.pat===p?"selected":""}>${p}</option>`).join("")}</select></div>
+    <p class="note">サポート・トレンドライン付近=その線から0〜3%上。フィボ押し=直近の上昇に対して38.2〜61.8%押した位置。いずれも機械的な判定の目安です。</p>
   </div>`;
   $("form").querySelectorAll("[data-k]").forEach(el => {
     el.addEventListener(el.tagName==="SELECT" ? "change" : "input", () => {
@@ -200,6 +257,10 @@ function buildForm(){
     const m = e.target.dataset.m; if(!m) return;
     S.mkt = S.mkt.includes(m) ? S.mkt.filter(x=>x!==m) : [...S.mkt, m];
     e.target.classList.toggle("on"); preset=""; buildPresets(); run();
+  };
+  $("tg2").onclick = e => {
+    const k = e.target.dataset.t; if(!k) return;
+    S[k] = !S[k]; e.target.classList.toggle("on"); preset=""; buildPresets(); run();
   };
   $("tgs").onclick = e => {
     const k = e.target.dataset.t; if(!k) return;
@@ -231,6 +292,10 @@ function pass(r){
   if(S.h20 && !r.h20) return false;
   if(S.h52 && !r.h52) return false;
   if(S.star && !stars.has(r.code)) return false;
+  if(S.nsup && !(r.sup !== null && r.sup >= 0 && r.sup <= 3)) return false;
+  if(S.ntl && !(r.tlu !== null && r.tlu >= 0 && r.tlu <= 3)) return false;
+  if(S.nfib && !r.fib) return false;
+  if(S.pat && !(r.pat||"").split("|").some(p => p.startsWith(S.pat))) return false;
   return true;
 }
 function run(){
@@ -256,6 +321,9 @@ function card(r){
   if(r.po) tags.push(`<span class="tag">PO</span>`);
   if(r.up25) tags.push(`<span class="tag">25日線↑</span>`);
   if(r.vr >= 2) tags.push(`<span class="tag hot">出来高${fx(r.vr,1)}倍</span>`);
+  (r.pat||"").split("|").filter(Boolean).forEach(p => tags.push(`<span class="tag hot">${p}</span>`));
+  if(r.sup!==null && r.sup>=0 && r.sup<=3) tags.push(`<span class="tag">サポート付近</span>`);
+  if(r.fib) tags.push(`<span class="tag">フィボ押し</span>`);
   tags.push(`<span class="tag">${r.mkt}</span>`);
   if(r.sec) tags.push(`<span class="tag">${r.sec}</span>`);
   return `<div class="card" data-c="${r.code}">
@@ -274,6 +342,7 @@ function card(r){
     </div>
     <div class="tags">${tags.join("")}</div>
     <div class="links">
+      <a href="#" data-chart="${r.code}" style="background:var(--accent);color:#fff">チャート分析</a>
       <a href="https://kabutan.jp/stock/chart?code=${r.code}" target="_blank" rel="noopener">株探チャート</a>
       <a href="https://finance.yahoo.co.jp/quote/${r.code}.T/chart" target="_blank" rel="noopener">Yahoo!</a>
     </div>
@@ -296,6 +365,8 @@ $("list").addEventListener("click", e => {
     store.set("stars", [...stars]); e.target.classList.toggle("on");
     toast(stars.has(s) ? "監視に追加" : "監視から外しました"); return;
   }
+  const ch = e.target.closest("[data-chart]");
+  if(ch){ e.preventDefault(); openChart(ch.dataset.chart); return; }
   if(e.target.closest("a")) return;
   const c = e.target.closest(".card"); if(c) c.classList.toggle("open");
 });
@@ -308,8 +379,144 @@ $("copy").onclick = async () => {
 };
 function toast(t){ const el=$("toast"); el.textContent=t; el.classList.add("show"); clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove("show"),1600); }
 
+// ---------- チャート分析 ----------
+const LAYERS = [["ma","移動平均","#e8b04a"],["sr","サポート/レジスタンス","#4f8cff"],["tl","トレンドライン","#c77dff"],["fib","フィボナッチ","#4fd1c5"],["vol","出来高","#5b6475"]];
+const MA = {d:[5,25,75], w:[13,26,52], m:[12,24,60]};
+const MA_COL = ["#e8b04a","#4f8cff","#c77dff"];
+const SHOW = {d:150, w:110, m:60};
+const FIBR = ["0%","23.6%","38.2%","50%","61.8%","78.6%","100%"];
+const TFN = {d:"日足", w:"週足", m:"月足"};
+let CV = {code:null, data:null, tf:"d", chart:null, on:store.get("layers", {ma:true, sr:true, tl:true, fib:false, vol:true})};
+
+const tStr = n => { const s = String(n); return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6)}`; };
+const tMs = n => Date.parse(tStr(n));
+const pct = (a, b) => (a / b - 1) * 100;
+const yen = v => (+v).toLocaleString(undefined, {maximumFractionDigits:1});
+
+async function openChart(code){
+  const r = DATA.find(x => x.code === code);
+  CV.code = code; CV.data = null;
+  $("cvName").textContent = r ? r.name : code;
+  $("cvSub").textContent = r ? `${code} ・ ${r.mkt} ・ ${r.sec||""}` : code;
+  $("cvStar").classList.toggle("on", stars.has(code));
+  $("cvInfo").innerHTML = `<div class="msg">読み込み中…</div>`;
+  $("cv").classList.add("show"); document.body.style.overflow = "hidden";
+  try{
+    CV.data = await (await fetch(`c/${code}.json?${DATA_DATE}`)).json();
+    draw();
+  }catch(e){
+    $("cvInfo").innerHTML = `<div class="msg">チャートデータを読み込めませんでした</div>`;
+  }
+}
+function closeChart(){
+  $("cv").classList.remove("show"); document.body.style.overflow = "";
+  if(CV.chart){ CV.chart.remove(); CV.chart = null; }
+}
+
+function draw(){
+  if(!CV.data) return;
+  if(typeof LightweightCharts === "undefined"){
+    $("cvInfo").innerHTML = `<div class="msg">チャートの部品を読み込めませんでした。通信状況を確認してください。</div>`; return;
+  }
+  const tf = CV.tf, rows = CV.data[tf], a = CV.data.a[tf], on = CV.on;
+  document.querySelectorAll("#tf button").forEach(b => b.classList.toggle("on", b.dataset.tf === tf));
+  $("layers").innerHTML = LAYERS.map(([k,l,c]) =>
+    `<button data-l="${k}" class="${on[k]?"on":""}"><i style="background:${c}"></i>${l}</button>`).join("");
+  if(CV.chart) CV.chart.remove();
+  const ch = LightweightCharts.createChart($("chart"), {
+    autoSize: true,
+    layout: {background:{color:"#0f1115"}, textColor:"#9097a5", fontSize:11},
+    grid: {vertLines:{color:"#1a1e25"}, horzLines:{color:"#1a1e25"}},
+    rightPriceScale: {borderColor:"#262a33"},
+    timeScale: {borderColor:"#262a33", rightOffset:3},
+    crosshair: {mode: 0},
+    localization: {locale:"ja-JP", dateFormat:"yyyy/MM/dd"},
+  });
+  CV.chart = ch;
+  const candle = ch.addCandlestickSeries({
+    upColor:"#ff5a5f", downColor:"#3fb37f", borderUpColor:"#ff5a5f", borderDownColor:"#3fb37f",
+    wickUpColor:"#ff5a5f", wickDownColor:"#3fb37f"
+  });
+  candle.setData(rows.map(r => ({time:tStr(r[0]), open:r[1], high:r[2], low:r[3], close:r[4]})));
+  candle.priceScale().applyOptions({scaleMargins:{top:0.06, bottom: on.vol ? 0.22 : 0.06}});
+
+  if(on.vol){
+    const vs = ch.addHistogramSeries({priceScaleId:"vol", priceFormat:{type:"volume"}, lastValueVisible:false, priceLineVisible:false});
+    ch.priceScale("vol").applyOptions({scaleMargins:{top:0.82, bottom:0}});
+    vs.setData(rows.map(r => ({time:tStr(r[0]), value:r[5], color: r[4] >= r[1] ? "rgba(255,90,95,.45)" : "rgba(63,179,127,.45)"})));
+  }
+  if(on.ma){
+    MA[tf].forEach((n, j) => {
+      if(rows.length < n) return;
+      const s = ch.addLineSeries({color:MA_COL[j], lineWidth:1, lastValueVisible:false, priceLineVisible:false, crosshairMarkerVisible:false});
+      const out = []; let sum = 0;
+      rows.forEach((r, i) => { sum += r[4]; if(i >= n) sum -= rows[i-n][4]; if(i >= n-1) out.push({time:tStr(r[0]), value:sum/n}); });
+      s.setData(out);
+    });
+  }
+  if(on.sr){
+    a.sr.forEach(x => candle.createPriceLine({
+      price:x.p, color: x.t === "s" ? "#4f8cff" : "#ff9f43", lineWidth:1, lineStyle:2,
+      axisLabelVisible:true, title: `${x.t === "s" ? "サポート" : "レジスタンス"}(${x.n})`
+    }));
+  }
+  if(on.tl){
+    const first = rows[0][0];
+    a.tl.forEach(t => {
+      let d1 = t.d1, p1 = t.p1;
+      if(d1 < first){ // 表示範囲より前から始まる線は、表示の左端から描く
+        const k = (tMs(first) - tMs(t.d1)) / (tMs(t.d2) - tMs(t.d1));
+        p1 = t.p1 + (t.p2 - t.p1) * k; d1 = first;
+      }
+      const s = ch.addLineSeries({color: t.k === "up" ? "#c77dff" : "#ff6bcb", lineWidth:2, lastValueVisible:false, priceLineVisible:false, crosshairMarkerVisible:false});
+      s.setData([{time:tStr(d1), value:p1}, {time:tStr(t.d2), value:t.p2}]);
+    });
+  }
+  if(on.fib && a.fib){
+    a.fib.lv.forEach((p, i) => candle.createPriceLine({
+      price:p, color: i === 2 || i === 4 ? "#4fd1c5" : "rgba(79,209,197,.55)", lineWidth:1, lineStyle:1,
+      axisLabelVisible: i >= 2 && i <= 4, title:`Fib ${FIBR[i]}`
+    }));
+  }
+  ch.timeScale().setVisibleLogicalRange({from: Math.max(0, rows.length - SHOW[tf]), to: rows.length + 2});
+  info(rows, a);
+}
+
+function info(rows, a){
+  const close = rows[rows.length-1][4], tf = CV.tf;
+  const pats = a.pat.length ? a.pat.map(p => `<span class="tag hot">${p}</span>`).join(" ") : `<span class="cd">はっきりしたパターンは検出されませんでした</span>`;
+  const sup = a.sr.filter(x => x.t === "s"), res = a.sr.filter(x => x.t === "r");
+  const lvRow = (x, lab) => `<div class="kv"><span>${lab}(接触${x.n}回)</span><b>${yen(x.p)}円 <small class="${sg(pct(x.p, close))}">${pct(x.p, close) > 0 ? "+" : ""}${pct(x.p, close).toFixed(1)}%</small></b></div>`;
+  const tls = a.tl.map(t => `<div class="kv"><span>${t.k === "up" ? "上昇トレンドライン" : "下降トレンドライン"}の現在値</span><b>${yen(t.p2)}円 <small class="${sg(pct(t.p2, close))}">${pct(t.p2, close) > 0 ? "+" : ""}${pct(t.p2, close).toFixed(1)}%</small></b></div>`).join("")
+    || `<div class="kv"><span>条件に合うラインはありません</span><b></b></div>`;
+  let fib = `<div class="kv"><span>計算できません</span><b></b></div>`;
+  if(a.fib){
+    const f = a.fib;
+    fib = `<div class="kv"><span>基準</span><b>${f.dir === "up" ? "上昇の押し目" : "下落の戻り"}(${yen(f.lo)}〜${yen(f.hi)}円)</b></div>`
+      + f.lv.map((p, i) => i === 0 || i === 6 ? "" : `<div class="kv"><span>${FIBR[i]}${f.dir === "up" ? "押し" : "戻し"}</span><b>${yen(p)}円 <small class="${sg(pct(p, close))}">${pct(p, close) > 0 ? "+" : ""}${pct(p, close).toFixed(1)}%</small></b></div>`).join("");
+  }
+  $("cvInfo").innerHTML = `
+    <div class="box"><h4>チャートパターン(${TFN[tf]})</h4><div class="tags">${pats}</div></div>
+    <div class="box"><h4>レジスタンス(上値の目安)</h4>${res.slice().reverse().map(x => lvRow(x, "レジスタンス")).join("") || `<div class="kv"><span>上に目立つ節目なし</span><b></b></div>`}
+      <div class="kv"><span>現在値</span><b>${yen(close)}円</b></div>
+      ${sup.map(x => lvRow(x, "サポート")).join("") || `<div class="kv"><span>下に目立つ節目なし</span><b></b></div>`}</div>
+    <div class="box"><h4>トレンドライン</h4>${tls}</div>
+    <div class="box"><h4>フィボナッチ</h4>${fib}</div>`;
+}
+
+$("tf").onclick = e => { const t = e.target.dataset.tf; if(t){ CV.tf = t; draw(); } };
+$("layers").onclick = e => { const b = e.target.closest("[data-l]"); if(!b) return; CV.on[b.dataset.l] = !CV.on[b.dataset.l]; store.set("layers", CV.on); draw(); };
+$("cvClose").onclick = closeChart;
+$("cvStar").onclick = e => {
+  const s = CV.code; stars.has(s) ? stars.delete(s) : stars.add(s);
+  store.set("stars", [...stars]); e.target.classList.toggle("on");
+  document.querySelectorAll(`[data-s="${s}"]`).forEach(b => b.classList.toggle("on", stars.has(s)));
+  toast(stars.has(s) ? "監視に追加" : "監視から外しました");
+};
+
 // ---------- 読み込み ----------
 fetch("data.json?" + Date.now()).then(r => r.json()).then(j => {
+  DATA_DATE = j.date;
   DATA = j.rows.map(a => Object.fromEntries(j.keys.map((k,i)=>[k,a[i]])));
   $("dt").textContent = `${j.date} 終値 ・ ${j.count.toLocaleString()}銘柄`;
   buildPresets(); buildForm(); run();
