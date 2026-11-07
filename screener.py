@@ -27,30 +27,83 @@ HISTORY = "14mo"     # 52週高値を出すために1年強の履歴を取る
 
 
 # ---------------------------------------------------------------- 銘柄一覧
-def load_tickers() -> pd.DataFrame:
-    """JPX公開の上場銘柄一覧を取得。失敗したら前回保存した tickers.csv を使う。"""
+UA = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+    "Accept-Language": "ja,en;q=0.8",
+}
+JPX_PAGE_URL = "https://www.jpx.co.jp/markets/statistics-equities/misc/01.html"
+LOCAL_XLS = ROOT / "data_j.xls"   # 手動で置いた一覧ファイル(予備)
+
+
+def _download(url: str) -> bytes:
+    import urllib.request
+
+    req = urllib.request.Request(url, headers=UA)
+    with urllib.request.urlopen(req, timeout=60) as res:
+        return res.read()
+
+
+def _jpx_xls() -> bytes:
+    """JPXから一覧ファイルを取得。直接URLがダメなら掲載ページからリンクを探す。"""
+    import re
+
     try:
-        df = pd.read_excel(JPX_LIST_URL, dtype=str)
-        df = df[df["市場・商品区分"].str.contains("内国株式", na=False)]
-        df["market"] = (
-            df["市場・商品区分"]
-            .str.replace("（内国株式）", "", regex=False)
-            .str.replace("(内国株式)", "", regex=False)
-        )
-        out = pd.DataFrame(
-            {
-                "code": df["コード"].str.strip(),
-                "name": df["銘柄名"].str.strip(),
-                "market": df["market"].str.strip(),
-                "sector": df["33業種区分"].str.strip(),
-            }
-        )
-        out.to_csv(TICKERS_CSV, index=False)
-        print(f"JPX一覧を取得: {len(out)}銘柄")
-        return out
+        return _download(JPX_LIST_URL)
     except Exception as e:  # noqa: BLE001
-        print(f"JPX一覧の取得に失敗({e})。保存済みの一覧を使います。")
+        print(f"  直接取得に失敗: {e}")
+    html = _download(JPX_PAGE_URL).decode("utf-8", "ignore")
+    m = re.search(r'href="([^"]+data_j\.xls)"', html)
+    if not m:
+        raise RuntimeError("掲載ページに data_j.xls のリンクが見つかりません")
+    link = m.group(1)
+    if link.startswith("/"):
+        link = "https://www.jpx.co.jp" + link
+    return _download(link)
+
+
+def _parse_jpx(df: pd.DataFrame) -> pd.DataFrame:
+    df = df[df["市場・商品区分"].str.contains("内国株式", na=False)].copy()
+    df["market"] = (
+        df["市場・商品区分"]
+        .str.replace("（内国株式）", "", regex=False)
+        .str.replace("(内国株式)", "", regex=False)
+    )
+    return pd.DataFrame(
+        {
+            "code": df["コード"].str.strip(),
+            "name": df["銘柄名"].str.strip(),
+            "market": df["market"].str.strip(),
+            "sector": df["33業種区分"].str.strip(),
+        }
+    )
+
+
+def load_tickers() -> pd.DataFrame:
+    """銘柄一覧を ①JPXサイト ②リポジトリに置いた data_j.xls ③前回の tickers.csv の順で取得。"""
+    import io
+
+    sources = [
+        ("JPXサイト", lambda: pd.read_excel(io.BytesIO(_jpx_xls()), dtype=str)),
+        ("data_j.xls", lambda: pd.read_excel(LOCAL_XLS, dtype=str)),
+    ]
+    for label, fn in sources:
+        try:
+            out = _parse_jpx(fn())
+            if len(out) < 1000:
+                raise RuntimeError(f"銘柄数が少なすぎます({len(out)})")
+            out.to_csv(TICKERS_CSV, index=False)
+            print(f"銘柄一覧を取得({label}): {len(out)}銘柄")
+            return out
+        except Exception as e:  # noqa: BLE001
+            print(f"銘柄一覧の取得に失敗({label}): {e}")
+    if TICKERS_CSV.exists():
+        print("前回保存した tickers.csv を使います。")
         return pd.read_csv(TICKERS_CSV, dtype=str)
+    sys.exit(
+        "銘柄一覧を取得できませんでした。JPXサイトから data_j.xls をダウンロードして"
+        "リポジトリに置いてください。"
+    )
 
 
 # ---------------------------------------------------------------- 株価取得
