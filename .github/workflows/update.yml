@@ -1,0 +1,35 @@
+name: 株価データ更新
+
+on:
+  schedule:
+    # 平日 18:30(日本時間)= 09:30(UTC)
+    - cron: "30 9 * * 1-5"
+  workflow_dispatch: {}   # 手動実行ボタン
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: ライブラリをインストール
+        run: pip install -r requirements.txt
+
+      - name: データ作成
+        run: python screener.py
+
+      - name: 結果を保存
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add data.json tickers.csv
+          git diff --cached --quiet || git commit -m "データ更新 $(date +'%Y-%m-%d')"
+          git push
