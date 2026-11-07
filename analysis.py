@@ -47,28 +47,62 @@ def _sr_levels(prices: list[float], tol: float):
     return [{"p": lv["sum"] / lv["n"], "n": lv["n"]} for lv in levels if lv["n"] >= 2]
 
 
-def _trendline(idx: list[int], vals: np.ndarray, closes: np.ndarray, up: bool, tol: float, last: int):
-    """直近の山(谷)2点を結び、その後ほとんど割り込んで(超えて)いない線を探す。"""
-    cand = idx[-8:]
-    for j in range(len(cand) - 1, 0, -1):
+def _trendline(idx: list[int], lows: np.ndarray, highs: np.ndarray, closes: np.ndarray,
+               up: bool, tol: float, last: int):
+    """
+    トレンドラインを探す。
+    - 候補: 直近の谷(上昇ライン)または山(下降ライン)のうち2点を結んだ線
+    - 条件: 2点目以降、終値がラインを tol 以上割り込んで(超えて)いない
+            (直近3本は除外して判定し、割れ/ブレイクは別に表示する)
+    - 採点: 線に触れた山谷の数が多いほど、期間が長いほど、最後の接触が新しいほど高得点
+    """
+    vals = lows if up else highs
+    cand = idx[-14:]
+    n_bars = last + 1
+    best, best_score = None, -1.0
+    for j in range(1, len(cand)):
         b = cand[j]
-        for i in range(j - 1, -1, -1):
+        for i in range(j):
             a = cand[i]
-            if b - a < 3:
+            if b - a < 4:
                 continue
             ya, yb = vals[a], vals[b]
-            if up and not yb > ya:
+            if up and yb <= ya:
                 continue
-            if not up and not yb < ya:
+            if not up and yb >= ya:
                 continue
             slope = (yb - ya) / (b - a)
-            xs = np.arange(a, last + 1)
-            line = ya + slope * (xs - a)
-            seg = closes[a : last + 1]
-            ok = (seg >= line * (1 - tol)).all() if up else (seg <= line * (1 + tol)).all()
-            if ok:
-                return {"a": int(a), "ya": float(ya), "end": float(ya + slope * (last - a))}
-    return None
+            line = lambda x: ya + slope * (x - a)  # noqa: E731
+            # 1点目〜2点目の間で、ヒゲが線を大きく突き抜けていないこと
+            mid = np.arange(a, b + 1)
+            if up and (vals[a : b + 1] < line(mid) * (1 - tol)).any():
+                continue
+            if not up and (vals[a : b + 1] > line(mid) * (1 + tol)).any():
+                continue
+            # 2点目以降、直近3本を除き終値が線を割っていない(超えていない)こと
+            chk_end = max(b, last - 3)
+            xs = np.arange(b, chk_end + 1)
+            seg = closes[b : chk_end + 1]
+            if up and (seg < line(xs) * (1 - tol)).any():
+                continue
+            if not up and (seg > line(xs) * (1 + tol)).any():
+                continue
+            # 接触回数(線の近くにある山谷の数)
+            touch_idx = [k for k in idx if k >= a and abs(vals[k] - line(k)) / line(k) <= tol * 0.6]
+            touches = len(touch_idx)
+            span = (b - a) / n_bars
+            recency = 1 - (last - max(touch_idx)) / n_bars
+            score = touches * 2 + span * 3 + recency * 2
+            if score > best_score:
+                end = line(last)
+                status = "on"
+                if up and closes[-1] < end * (1 - tol * 0.3):
+                    status = "break"
+                if not up and closes[-1] > end * (1 + tol * 0.3):
+                    status = "break"
+                best_score = score
+                best = {"a": int(a), "ya": float(ya), "end": float(end), "n": touches, "st": status}
+    return best
 
 
 def _patterns(h, l, c, ph, pl, tol, look):
@@ -143,13 +177,14 @@ def analyze(df: pd.DataFrame, tf: str) -> dict:
     ]
 
     # トレンドライン
-    up = _trendline([i for i in pl if i >= start], l, c, True, p["tol"], last)
-    dn = _trendline([i for i in ph if i >= start], h, c, False, p["tol"], last)
+    up = _trendline([i for i in pl if i >= start], l, h, c, True, p["tol"], last)
+    dn = _trendline([i for i in ph if i >= start], l, h, c, False, p["tol"], last)
     for t, kind in ((up, "up"), (dn, "down")):
         if t:
-            res["tl"].append(
-                {"k": kind, "d1": dates[t["a"]], "p1": round(t["ya"], 1), "d2": dates[last], "p2": round(t["end"], 1)}
-            )
+            res["tl"].append({
+                "k": kind, "d1": dates[t["a"]], "p1": round(t["ya"], 1), "d2": dates[last],
+                "p2": round(t["end"], 1), "n": t["n"], "st": t["st"],
+            })
 
     # フィボナッチ(直近の高値と安値)
     fs = max(0, n - p["fib"])
@@ -179,7 +214,7 @@ def screen_flags(daily_analysis: dict, close: float) -> dict:
         near_sup = round((close / sup[0]["p"] - 1) * 100, 2)
     tl_up = None
     for t in a["tl"]:
-        if t["k"] == "up" and t["p2"] > 0:
+        if t["k"] == "up" and t["p2"] > 0 and t.get("st") != "break":
             tl_up = round((close / t["p2"] - 1) * 100, 2)
     fib = False
     if a["fib"] and a["fib"]["dir"] == "up":

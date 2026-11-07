@@ -101,6 +101,10 @@ select{width:auto;text-align:left}
 .kv{display:flex;justify-content:space-between;font-size:14px;padding:3px 0;border-top:1px dashed #262a33}
 .kv:first-of-type{border-top:0}
 .kv span{color:var(--sub)}
+.tools{display:flex;gap:6px;margin-top:8px}
+.tools button{flex:1;border:1px solid var(--line);background:var(--chip);color:var(--text);border-radius:8px;padding:8px 4px;font-size:12.5px}
+.tools button.on{background:#f0f0f0;color:#111;border-color:#f0f0f0}
+.hint{font-size:12px;color:var(--warn);min-height:18px;margin-top:6px}
 .att{font-size:11px;color:var(--sub);margin-top:10px;text-align:center}
 .att a{color:var(--sub)}
 </style>
@@ -148,6 +152,13 @@ select{width:auto;text-align:left}
       <button data-tf="d" class="on">日足</button><button data-tf="w">週足</button><button data-tf="m">月足</button>
     </div>
     <div id="chart"></div>
+    <div class="tools" id="tools">
+      <button data-m="line">／ 斜め線</button>
+      <button data-m="hline">― 水平線</button>
+      <button data-m="undo">1本消す</button>
+      <button data-m="clear">全部消す</button>
+    </div>
+    <div class="hint" id="hint"></div>
     <div class="lg" id="layers"></div>
     <div id="cvInfo"></div>
     <div class="att">チャート: <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView Lightweight Charts</a> ・ 分析は機械的な目安です</div>
@@ -386,7 +397,7 @@ const MA_COL = ["#e8b04a","#4f8cff","#c77dff"];
 const SHOW = {d:150, w:110, m:60};
 const FIBR = ["0%","23.6%","38.2%","50%","61.8%","78.6%","100%"];
 const TFN = {d:"日足", w:"週足", m:"月足"};
-let CV = {code:null, data:null, tf:"d", chart:null, on:store.get("layers", {ma:true, sr:true, tl:true, fib:false, vol:true})};
+let CV = {code:null, data:null, tf:"d", chart:null, mode:null, p1:null, candle:null, on:store.get("layers", {ma:true, sr:true, tl:true, fib:false, vol:true})};
 
 const tStr = n => { const s = String(n); return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6)}`; };
 const tMs = n => Date.parse(tStr(n));
@@ -395,7 +406,7 @@ const yen = v => (+v).toLocaleString(undefined, {maximumFractionDigits:1});
 
 async function openChart(code){
   const r = DATA.find(x => x.code === code);
-  CV.code = code; CV.data = null;
+  CV.code = code; CV.data = null; CV.range = null; setMode(null);
   $("cvName").textContent = r ? r.name : code;
   $("cvSub").textContent = r ? `${code} ・ ${r.mkt} ・ ${r.sec||""}` : code;
   $("cvStar").classList.toggle("on", stars.has(code));
@@ -439,6 +450,7 @@ function draw(){
   });
   candle.setData(rows.map(r => ({time:tStr(r[0]), open:r[1], high:r[2], low:r[3], close:r[4]})));
   candle.priceScale().applyOptions({scaleMargins:{top:0.06, bottom: on.vol ? 0.22 : 0.06}});
+  CV.candle = candle;
 
   if(on.vol){
     const vs = ch.addHistogramSeries({priceScaleId:"vol", priceFormat:{type:"volume"}, lastValueVisible:false, priceLineVisible:false});
@@ -478,7 +490,11 @@ function draw(){
       axisLabelVisible: i >= 2 && i <= 4, title:`Fib ${FIBR[i]}`
     }));
   }
-  ch.timeScale().setVisibleLogicalRange({from: Math.max(0, rows.length - SHOW[tf]), to: rows.length + 2});
+  drawUser(ch, candle, rows);
+  ch.subscribeClick(onChartTap);
+  const keep = CV.range && CV.rangeTf === tf;
+  ch.timeScale().setVisibleLogicalRange(keep ? CV.range : {from: Math.max(0, rows.length - SHOW[tf]), to: rows.length + 2});
+  ch.timeScale().subscribeVisibleLogicalRangeChange(r => { if(r){ CV.range = r; CV.rangeTf = tf; } });
   info(rows, a);
 }
 
@@ -487,7 +503,8 @@ function info(rows, a){
   const pats = a.pat.length ? a.pat.map(p => `<span class="tag hot">${p}</span>`).join(" ") : `<span class="cd">はっきりしたパターンは検出されませんでした</span>`;
   const sup = a.sr.filter(x => x.t === "s"), res = a.sr.filter(x => x.t === "r");
   const lvRow = (x, lab) => `<div class="kv"><span>${lab}(接触${x.n}回)</span><b>${yen(x.p)}円 <small class="${sg(pct(x.p, close))}">${pct(x.p, close) > 0 ? "+" : ""}${pct(x.p, close).toFixed(1)}%</small></b></div>`;
-  const tls = a.tl.map(t => `<div class="kv"><span>${t.k === "up" ? "上昇トレンドライン" : "下降トレンドライン"}の現在値</span><b>${yen(t.p2)}円 <small class="${sg(pct(t.p2, close))}">${pct(t.p2, close) > 0 ? "+" : ""}${pct(t.p2, close).toFixed(1)}%</small></b></div>`).join("")
+  const ST = t => t.k === "up" ? (t.st === "break" ? "割り込み" : "ライン上") : (t.st === "break" ? "上抜け" : "ライン下");
+  const tls = a.tl.map(t => `<div class="kv"><span>${t.k === "up" ? "上昇" : "下降"}ライン(接触${t.n||2}回・${ST(t)})</span><b>${yen(t.p2)}円 <small class="${sg(pct(t.p2, close))}">${pct(t.p2, close) > 0 ? "+" : ""}${pct(t.p2, close).toFixed(1)}%</small></b></div>`).join("")
     || `<div class="kv"><span>条件に合うラインはありません</span><b></b></div>`;
   let fib = `<div class="kv"><span>計算できません</span><b></b></div>`;
   if(a.fib){
@@ -495,7 +512,11 @@ function info(rows, a){
     fib = `<div class="kv"><span>基準</span><b>${f.dir === "up" ? "上昇の押し目" : "下落の戻り"}(${yen(f.lo)}〜${yen(f.hi)}円)</b></div>`
       + f.lv.map((p, i) => i === 0 || i === 6 ? "" : `<div class="kv"><span>${FIBR[i]}${f.dir === "up" ? "押し" : "戻し"}</span><b>${yen(p)}円 <small class="${sg(pct(p, close))}">${pct(p, close) > 0 ? "+" : ""}${pct(p, close).toFixed(1)}%</small></b></div>`).join("");
   }
-  $("cvInfo").innerHTML = `
+  const ul = userLines().map((u, i) => {
+    const v = userVal(u, rows); if(v === null) return "";
+    return `<div class="kv"><span>${u.k === "h" ? "水平線" : "斜め線"}${i+1} の現在値</span><b>${yen(v)}円 <small class="${sg(pct(v, close))}">${pct(v, close) > 0 ? "+" : ""}${pct(v, close).toFixed(1)}%</small></b></div>`;
+  }).join("");
+  $("cvInfo").innerHTML = (ul ? `<div class="box"><h4>自分で引いた線(${TFN[tf]})</h4>${ul}</div>` : "") + `
     <div class="box"><h4>チャートパターン(${TFN[tf]})</h4><div class="tags">${pats}</div></div>
     <div class="box"><h4>レジスタンス(上値の目安)</h4>${res.slice().reverse().map(x => lvRow(x, "レジスタンス")).join("") || `<div class="kv"><span>上に目立つ節目なし</span><b></b></div>`}
       <div class="kv"><span>現在値</span><b>${yen(close)}円</b></div>
@@ -504,7 +525,85 @@ function info(rows, a){
     <div class="box"><h4>フィボナッチ</h4>${fib}</div>`;
 }
 
-$("tf").onclick = e => { const t = e.target.dataset.tf; if(t){ CV.tf = t; draw(); } };
+// ---------- 自分で線を引く ----------
+const UKEY = () => `draw:${CV.code}:${CV.tf}`;
+const userLines = () => store.get(UKEY(), []);
+const saveLines = v => store.set(UKEY(), v);
+const idxOf = (rows, d) => { for(let i = 0; i < rows.length; i++) if(rows[i][0] === d) return i; return -1; };
+function userVal(u, rows){
+  if(u.k === "h") return u.p;
+  const i1 = idxOf(rows, u.d1), i2 = idxOf(rows, u.d2);
+  if(i1 < 0 || i2 < 0 || i1 === i2) return null;
+  return u.p1 + (u.p2 - u.p1) * (rows.length - 1 - i1) / (i2 - i1);
+}
+function drawUser(ch, candle, rows){
+  const last = rows.length - 1;
+  userLines().forEach((u, n) => {
+    if(u.k === "h"){
+      candle.createPriceLine({price:u.p, color:"#f0f0f0", lineWidth:1, lineStyle:0, axisLabelVisible:true, title:`水平線${n+1}`});
+      return;
+    }
+    let i1 = idxOf(rows, u.d1), i2 = idxOf(rows, u.d2);
+    if(i1 < 0 || i2 < 0 || i1 === i2) return;
+    let p1 = u.p1, p2 = u.p2;
+    if(i1 > i2){ [i1, i2] = [i2, i1]; [p1, p2] = [p2, p1]; }
+    const end = p1 + (p2 - p1) * (last - i1) / (i2 - i1);
+    const s = ch.addLineSeries({color:"#f0f0f0", lineWidth:2, lastValueVisible:false, priceLineVisible:false, crosshairMarkerVisible:false});
+    s.setData([{time:tStr(rows[i1][0]), value:p1}, {time:tStr(rows[last][0]), value:end}]);
+  });
+  if(CV.p1){
+    candle.setMarkers([{time:tStr(CV.p1.d), position:"inBar", color:"#e8b04a", shape:"circle", size:1}]);
+  }
+}
+function setMode(m){
+  CV.mode = m; CV.p1 = null;
+  document.querySelectorAll("#tools button").forEach(b => b.classList.toggle("on", b.dataset.m === m));
+  $("hint").textContent = m === "line" ? "1点目(安値や高値)をタップしてください" : m === "hline" ? "線を引きたい価格をタップしてください" : "";
+}
+function snapPoint(param){
+  const rows = CV.data[CV.tf];
+  let i = Math.round(param.logical);
+  if(isNaN(i)) return null;
+  i = Math.max(0, Math.min(rows.length - 1, i));
+  const r = rows[i];
+  let price = CV.candle.coordinateToPrice(param.point.y);
+  // 近くの高値・安値・始値・終値にぴったり合わせる(吸着)
+  let best = null, bd = 28;
+  [r[2], r[3], r[4], r[1]].forEach(p => {
+    const y = CV.candle.priceToCoordinate(p);
+    if(y !== null && Math.abs(y - param.point.y) < bd){ bd = Math.abs(y - param.point.y); best = p; }
+  });
+  if(best !== null) price = best;
+  return price === null ? null : {d:r[0], p:Math.round(price * 10) / 10};
+}
+function onChartTap(param){
+  if(!CV.mode || !param.point || param.logical === undefined) return;
+  const pt = snapPoint(param); if(!pt) return;
+  const lines = userLines();
+  if(CV.mode === "hline"){
+    lines.push({k:"h", p:pt.p}); saveLines(lines); setMode(null); toast("水平線を引きました"); draw(); return;
+  }
+  if(!CV.p1){
+    CV.p1 = pt; $("hint").textContent = `1点目: ${yen(pt.p)}円 → 2点目をタップしてください`; draw(); return;
+  }
+  if(pt.d === CV.p1.d){ toast("別の日の足をタップしてください"); return; }
+  lines.push({k:"l", d1:CV.p1.d, p1:CV.p1.p, d2:pt.d, p2:pt.p}); saveLines(lines);
+  setMode(null); toast("斜め線を引きました"); draw();
+}
+$("tools").onclick = e => {
+  const m = e.target.closest("[data-m]")?.dataset.m; if(!m || !CV.data) return;
+  if(m === "undo"){ const l = userLines(); l.pop(); saveLines(l); setMode(null); draw(); return; }
+  if(m === "clear"){
+    if(!userLines().length) return;
+    if(e.target.dataset.confirm){ saveLines([]); delete e.target.dataset.confirm; e.target.textContent = "全部消す"; setMode(null); draw(); }
+    else { e.target.dataset.confirm = "1"; e.target.textContent = "もう一度押すと消去"; setTimeout(() => { delete e.target.dataset.confirm; e.target.textContent = "全部消す"; }, 2500); }
+    return;
+  }
+  setMode(CV.mode === m ? null : m);
+  if(CV.mode) draw();
+};
+
+$("tf").onclick = e => { const t = e.target.dataset.tf; if(t){ CV.tf = t; CV.range = null; setMode(null); draw(); } };
 $("layers").onclick = e => { const b = e.target.closest("[data-l]"); if(!b) return; CV.on[b.dataset.l] = !CV.on[b.dataset.l]; store.set("layers", CV.on); draw(); };
 $("cvClose").onclick = closeChart;
 $("cvStar").onclick = e => {
