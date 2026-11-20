@@ -169,6 +169,7 @@ def fetch_prices(codes: list[str]) -> dict[str, pd.DataFrame]:
                     interval="1d",
                     group_by="ticker",
                     auto_adjust=False,
+                    actions=True,        # 配当(Dividends)も取得
                     threads=True,
                     progress=False,
                 )
@@ -181,7 +182,11 @@ def fetch_prices(codes: list[str]) -> dict[str, pd.DataFrame]:
         for c, s in zip(chunk, symbols):
             try:
                 d = raw[s] if isinstance(raw.columns, pd.MultiIndex) else raw
-                d = d[["Open", "High", "Low", "Close", "Volume"]].dropna()
+                d = d[["Open", "High", "Low", "Close", "Volume"]].join(
+                    d[["Dividends"]] if "Dividends" in d.columns else pd.DataFrame(index=d.index, data={"Dividends": 0.0})
+                )
+                d["Dividends"] = d["Dividends"].fillna(0.0)
+                d = d.dropna()
                 if len(d) >= 30:
                     result[c] = d
             except KeyError:
@@ -206,6 +211,17 @@ def r(x, nd=2):
     if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
         return None
     return round(float(x), nd)
+
+
+def dividend_yield(d: pd.DataFrame):
+    """配当利回り(実績): 直近約1年(355日)に権利落ちした配当の合計 ÷ 終値。
+    年2回配当の権利落ち日が年ごとに数日ずれても二重に数えないよう、365日より少し短くしている。"""
+    if "Dividends" not in d.columns or len(d) == 0:
+        return None
+    since = d.index[-1] - pd.Timedelta(days=355)
+    total = d.loc[d.index > since, "Dividends"].sum()
+    last = d["Close"].iloc[-1]
+    return r(total / last * 100, 2) if last > 0 else None
 
 
 def calc(d: pd.DataFrame) -> dict | None:
@@ -236,6 +252,7 @@ def calc(d: pd.DataFrame) -> dict | None:
         "h52": bool(last > high52_prev) if len(h) >= 120 else None,    # 52週高値更新(終値)
         "f52": r((last / high52 - 1) * 100),                           # 52週高値からの距離
         "rsi": r(rsi(c), 1),
+        "dy": dividend_yield(d),
         "date": d.index[-1].strftime("%Y-%m-%d"),
     }
 

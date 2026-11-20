@@ -61,7 +61,7 @@ select{width:auto;text-align:left}
 .px{text-align:right;white-space:nowrap}
 .px b{font-size:16px}
 .pos{color:var(--up)} .neg{color:var(--down)}
-.mets{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:8px}
+.mets{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:8px}
 .m{background:#12151b;border-radius:8px;padding:4px 6px}
 .m span{display:block;font-size:10.5px;color:var(--sub)}
 .m b{font-size:13px;font-weight:600}
@@ -130,6 +130,7 @@ select{width:auto;text-align:left}
         <option value="tv20">売買代金</option>
         <option value="d25">25日線乖離</option>
         <option value="rsi">RSI</option>
+        <option value="dy">配当利回り</option>
         <option value="f52">52週高値に近い</option>
         <option value="code">コード</option>
       </select>
@@ -169,7 +170,7 @@ select{width:auto;text-align:left}
 // ---------- 条件の定義 ----------
 const DEFAULT = {
   mkt: ["プライム","スタンダード","グロース"], sec: "",
-  pmin: "", pmax: "", tvmin: 1, chgmin: "", chgmax: "", vrmin: "",
+  pmin: "", pmax: "", dymin: "", dymax: "", tvmin: 1, chgmin: "", chgmax: "", vrmin: "",
   d25min: "", d25max: "", rsimin: "", rsimax: "", f52: "",
   nsup:false, ntl:false, nfib:false, pat:"",
   a5:false, up25:false, a75:false, po:false, h20:false, h52:false, star:false,
@@ -185,6 +186,7 @@ const PRESETS = [
   {id:"tl",   name:"トレンドライン押し", set:{ntl:true, up25:true, sort:"tv20"}},
   {id:"fib",  name:"フィボ押し",   set:{nfib:true, up25:true, sort:"tv20"}},
   {id:"dbl",  name:"ダブルボトム", set:{pat:"ダブルボトム", sort:"vr"}},
+  {id:"div",  name:"高配当",       set:{dymin:3.5, sort:"dy"}},
   {id:"star", name:"★ 監視",       set:{star:true, tvmin:"", sort:"code", desc:false}},
 ];
 const TOGGLES = [
@@ -239,7 +241,8 @@ function buildForm(){
   <div class="grp"><h3>株価・流動性</h3>
     ${rng("pmin","pmax","株価","円")}
     ${num("tvmin","売買代金(20日平均)","億円以上")}
-    <p class="note">流動性の低い銘柄を外すため、初期値は1億円以上にしています。</p>
+    ${rng("dymin","dymax","配当利回り","%")}
+    <p class="note">流動性の低い銘柄を外すため、売買代金の初期値は1億円以上にしています。配当利回りは過去1年の実績配当から計算(会社予想ではありません)。</p>
   </div>
   <div class="grp"><h3>前日の値動き</h3>
     ${rng("chgmin","chgmax","前日比","%")}
@@ -288,6 +291,8 @@ function pass(r){
   if(has(S.pmin) && r.price < f(S.pmin)) return false;
   if(has(S.pmax) && r.price > f(S.pmax)) return false;
   if(has(S.tvmin) && !(r.tv20 >= f(S.tvmin))) return false;
+  if(has(S.dymin) && !(r.dy >= f(S.dymin))) return false;
+  if(has(S.dymax) && !(r.dy <= f(S.dymax))) return false;
   if(has(S.chgmin) && !(r.chg >= f(S.chgmin))) return false;
   if(has(S.chgmax) && !(r.chg <= f(S.chgmax))) return false;
   if(has(S.vrmin) && !(r.vr >= f(S.vrmin))) return false;
@@ -350,6 +355,8 @@ function card(r){
       <div class="m"><span>売買代金</span><b>${fx(r.tv,1)}億</b></div>
       <div class="m"><span>25日乖離</span><b class="${sg(r.d25)}">${fx(r.d25,1,"%")}</b></div>
       <div class="m"><span>RSI</span><b>${fx(r.rsi,0)}</b></div>
+      <div class="m"><span>配当利回り</span><b>${r.dy ? fx(r.dy,2,"%") : "—"}</b></div>
+      <div class="m"><span>52週高値比</span><b class="${sg(r.f52)}">${fx(r.f52,1,"%")}</b></div>
     </div>
     <div class="tags">${tags.join("")}</div>
     <div class="links">
@@ -408,7 +415,7 @@ async function openChart(code){
   const r = DATA.find(x => x.code === code);
   CV.code = code; CV.data = null; CV.range = null; setMode(null);
   $("cvName").textContent = r ? r.name : code;
-  $("cvSub").textContent = r ? `${code} ・ ${r.mkt} ・ ${r.sec||""}` : code;
+  $("cvSub").textContent = r ? `${code} ・ ${r.mkt} ・ ${r.sec||""}${r.dy ? ` ・ 配当 ${r.dy.toFixed(2)}%` : ""}` : code;
   $("cvStar").classList.toggle("on", stars.has(code));
   $("cvInfo").innerHTML = `<div class="msg">読み込み中…</div>`;
   $("cv").classList.add("show"); document.body.style.overflow = "hidden";
