@@ -2,9 +2,12 @@ name: 株価データ更新
 
 on:
   schedule:
-    # 平日 18:30(日本時間)= 09:30(UTC)
+    # 予備の自動実行(GitHubの時間指定は数時間遅れることがあるため複数回)
+    # 平日 17:00 / 18:30 / 20:30(日本時間)
+    - cron: "0 8 * * 1-5"
     - cron: "30 9 * * 1-5"
-  workflow_dispatch: {}   # 手動実行ボタン
+    - cron: "30 11 * * 1-5"
+  workflow_dispatch: {}   # 手動実行ボタン(外部サービスからの呼び出しもこれを使う)
 
 permissions:
   contents: write
@@ -45,10 +48,12 @@ jobs:
         uses: actions/deploy-pages@v4
 
       - name: 実行記録を保存(自動実行が止まらないようにするため)
+        continue-on-error: true
         run: |
-          date +'%Y-%m-%d %H:%M' > last_run.txt
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
+          git pull --rebase origin main || true
+          date +'%Y-%m-%d %H:%M' > last_run.txt
           git add last_run.txt tickers.csv
           git diff --cached --quiet || git commit -m "実行記録 $(date +'%Y-%m-%d')"
-          git push
+          git push || (git pull --rebase origin main && git push)
