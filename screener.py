@@ -182,11 +182,10 @@ def fetch_prices(codes: list[str]) -> dict[str, pd.DataFrame]:
         for c, s in zip(chunk, symbols):
             try:
                 d = raw[s] if isinstance(raw.columns, pd.MultiIndex) else raw
-                d = d[["Open", "High", "Low", "Close", "Volume"]].join(
-                    d[["Dividends"]] if "Dividends" in d.columns else pd.DataFrame(index=d.index, data={"Dividends": 0.0})
-                )
-                d["Dividends"] = d["Dividends"].fillna(0.0)
-                d = d.dropna()
+                base = d[["Open", "High", "Low", "Close", "Volume"]].copy()
+                for col in ("Dividends", "Stock Splits"):
+                    base[col] = d[col].fillna(0.0) if col in d.columns else 0.0
+                d = base.dropna()
                 if len(d) >= 30:
                     result[c] = d
             except KeyError:
@@ -213,13 +212,46 @@ def r(x, nd=2):
     return round(float(x), nd)
 
 
+def adjusted_dividends(d: pd.DataFrame) -> pd.Series:
+    """
+    株式分割の調整をした配当金を返す。
+    Yahooの株価は分割後の基準に揃えられているが、分割前の配当は調整されていないことがある。
+    - 配当日より後に分割があれば、その分割比率で配当を割る
+    - ただし分割後にも配当があり、分割前の配当が分割後とほぼ同じ水準なら
+      「すでに調整済み」とみなして割らない(二重に割るのを防ぐ)
+    """
+    div = d["Dividends"] if "Dividends" in d.columns else pd.Series(0.0, index=d.index)
+    div = div[div > 0].copy()
+    if div.empty or "Stock Splits" not in d.columns:
+        return div
+    splits = d["Stock Splits"]
+    splits = splits[(splits > 0) & (splits != 1)]
+    if splits.empty:
+        return div
+    out = div.copy()
+    for t, amount in div.items():
+        later = splits[splits.index > t]
+        if later.empty:
+            continue
+        ratio = float(np.prod(later.to_numpy()))
+        post = div[div.index > later.index.max()]
+        if not post.empty:
+            rel = amount / float(post.median())
+            # 分割前の配当が「分割比率ぶん大きい」より「同じくらい」に近ければ調整済みとみなす
+            if abs(math.log(rel)) <= abs(math.log(rel) - math.log(ratio)):
+                continue
+        out[t] = amount / ratio
+    return out
+
+
 def dividend_yield(d: pd.DataFrame):
-    """配当利回り(実績): 直近約1年(355日)に権利落ちした配当の合計 ÷ 終値。
+    """配当利回り(実績): 直近約1年(355日)に権利落ちした配当(分割調整後)の合計 ÷ 終値。
     年2回配当の権利落ち日が年ごとに数日ずれても二重に数えないよう、365日より少し短くしている。"""
-    if "Dividends" not in d.columns or len(d) == 0:
+    if len(d) == 0:
         return None
+    div = adjusted_dividends(d)
     since = d.index[-1] - pd.Timedelta(days=355)
-    total = d.loc[d.index > since, "Dividends"].sum()
+    total = div[div.index > since].sum()
     last = d["Close"].iloc[-1]
     return r(total / last * 100, 2) if last > 0 else None
 
