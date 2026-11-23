@@ -170,7 +170,7 @@ select{width:auto;text-align:left}
 // ---------- 条件の定義 ----------
 const DEFAULT = {
   mkt: ["プライム","スタンダード","グロース"], sec: "",
-  pmin: "", pmax: "", dymin: "", dymax: "", tvmin: 1, chgmin: "", chgmax: "", vrmin: "",
+  pmin: "", pmax: "", dymin: "", dymax: "", nodyx: false, tvmin: 1, chgmin: "", chgmax: "", vrmin: "",
   d25min: "", d25max: "", rsimin: "", rsimax: "", f52: "",
   nsup:false, ntl:false, nfib:false, pat:"",
   a5:false, up25:false, a75:false, po:false, h20:false, h52:false, star:false,
@@ -186,7 +186,7 @@ const PRESETS = [
   {id:"tl",   name:"トレンドライン押し", set:{ntl:true, up25:true, sort:"tv20"}},
   {id:"fib",  name:"フィボ押し",   set:{nfib:true, up25:true, sort:"tv20"}},
   {id:"dbl",  name:"ダブルボトム", set:{pat:"ダブルボトム", sort:"vr"}},
-  {id:"div",  name:"高配当",       set:{dymin:3.5, sort:"dy"}},
+  {id:"div",  name:"高配当",       set:{dymin:3.5, nodyx:true, sort:"dy"}},
   {id:"star", name:"★ 監視",       set:{star:true, tvmin:"", sort:"code", desc:false}},
 ];
 const TOGGLES = [
@@ -242,7 +242,8 @@ function buildForm(){
     ${rng("pmin","pmax","株価","円")}
     ${num("tvmin","売買代金(20日平均)","億円以上")}
     ${rng("dymin","dymax","配当利回り","%")}
-    <p class="note">流動性の低い銘柄を外すため、売買代金の初期値は1億円以上にしています。配当利回りは過去1年の実績配当から計算(会社予想ではありません)。</p>
+    <div class="tg" id="tg3"><button data-t="nodyx" class="${S.nodyx?"on":""}">一時的な配当の疑いがある銘柄を除く</button></div>
+    <p class="note">流動性の低い銘柄を外すため、売買代金の初期値は1億円以上にしています。配当利回りは過去1年の実績配当から計算(会社予想ではありません)。※は、1年前より配当が2.5倍超に増えている銘柄(記念・特別配当やデータの誤りの可能性)。</p>
   </div>
   <div class="grp"><h3>前日の値動き</h3>
     ${rng("chgmin","chgmax","前日比","%")}
@@ -272,6 +273,10 @@ function buildForm(){
     S.mkt = S.mkt.includes(m) ? S.mkt.filter(x=>x!==m) : [...S.mkt, m];
     e.target.classList.toggle("on"); preset=""; buildPresets(); run();
   };
+  $("tg3").onclick = e => {
+    const k = e.target.dataset.t; if(!k) return;
+    S[k] = !S[k]; e.target.classList.toggle("on"); preset=""; buildPresets(); run();
+  };
   $("tg2").onclick = e => {
     const k = e.target.dataset.t; if(!k) return;
     S[k] = !S[k]; e.target.classList.toggle("on"); preset=""; buildPresets(); run();
@@ -292,6 +297,7 @@ function pass(r){
   if(has(S.pmax) && r.price > f(S.pmax)) return false;
   if(has(S.tvmin) && !(r.tv20 >= f(S.tvmin))) return false;
   if(has(S.dymin) && !(r.dy >= f(S.dymin))) return false;
+  if(S.nodyx && r.dyx) return false;
   if(has(S.dymax) && !(r.dy <= f(S.dymax))) return false;
   if(has(S.chgmin) && !(r.chg >= f(S.chgmin))) return false;
   if(has(S.chgmax) && !(r.chg <= f(S.chgmax))) return false;
@@ -340,6 +346,7 @@ function card(r){
   (r.pat||"").split("|").filter(Boolean).forEach(p => tags.push(`<span class="tag hot">${p}</span>`));
   if(r.sup!==null && r.sup>=0 && r.sup<=3) tags.push(`<span class="tag">サポート付近</span>`);
   if(r.fib) tags.push(`<span class="tag">フィボ押し</span>`);
+  if(r.dyx) tags.push(`<span class="tag" style="color:var(--warn)">※一時的な配当の疑い</span>`);
   tags.push(`<span class="tag">${r.mkt}</span>`);
   if(r.sec) tags.push(`<span class="tag">${r.sec}</span>`);
   return `<div class="card" data-c="${r.code}">
@@ -355,7 +362,7 @@ function card(r){
       <div class="m"><span>売買代金</span><b>${fx(r.tv,1)}億</b></div>
       <div class="m"><span>25日乖離</span><b class="${sg(r.d25)}">${fx(r.d25,1,"%")}</b></div>
       <div class="m"><span>RSI</span><b>${fx(r.rsi,0)}</b></div>
-      <div class="m"><span>配当利回り</span><b>${r.dy ? fx(r.dy,2,"%") : "—"}</b></div>
+      <div class="m"><span>配当利回り</span><b>${r.dy ? fx(r.dy,2,"%") + (r.dyx ? `<small style="color:var(--warn)">※</small>` : "") : "—"}</b></div>
       <div class="m"><span>52週高値比</span><b class="${sg(r.f52)}">${fx(r.f52,1,"%")}</b></div>
     </div>
     <div class="tags">${tags.join("")}</div>
@@ -415,7 +422,7 @@ async function openChart(code){
   const r = DATA.find(x => x.code === code);
   CV.code = code; CV.data = null; CV.range = null; setMode(null);
   $("cvName").textContent = r ? r.name : code;
-  $("cvSub").textContent = r ? `${code} ・ ${r.mkt} ・ ${r.sec||""}${r.dy ? ` ・ 配当 ${r.dy.toFixed(2)}%` : ""}` : code;
+  $("cvSub").textContent = r ? `${code} ・ ${r.mkt} ・ ${r.sec||""}${r.dy ? ` ・ 配当 ${r.dy.toFixed(2)}%${r.dyx ? "※" : ""}` : ""}` : code;
   $("cvStar").classList.toggle("on", stars.has(code));
   $("cvInfo").innerHTML = `<div class="msg">読み込み中…</div>`;
   $("cv").classList.add("show"); document.body.style.overflow = "hidden";
