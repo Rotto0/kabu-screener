@@ -216,9 +216,10 @@ def adjusted_dividends(d: pd.DataFrame) -> pd.Series:
     """
     株式分割の調整をした配当金を返す。
     Yahooの株価は分割後の基準に揃えられているが、分割前の配当は調整されていないことがある。
-    - 配当日より後に分割があれば、その分割比率で配当を割る
-    - ただし分割後にも配当があり、分割前の配当が分割後とほぼ同じ水準なら
-      「すでに調整済み」とみなして割らない(二重に割るのを防ぐ)
+    また日本株では分割比率が逆向き(3分割が 1/3)で届くことがあるため、向きは次のように決める。
+    - 分割後にも配当がある: 分割前の配当を「そのまま / 比率で割る / 比率を掛ける」の3通りで
+      分割後の配当と比べ、一番近いものを採用(調整済みならそのまま)
+    - 分割後の配当がまだない: 株式分割(株数が増える)とみなし、配当を小さくする方向に調整
     """
     div = d["Dividends"] if "Dividends" in d.columns else pd.Series(0.0, index=d.index)
     div = div[div > 0].copy()
@@ -233,14 +234,14 @@ def adjusted_dividends(d: pd.DataFrame) -> pd.Series:
         later = splits[splits.index > t]
         if later.empty:
             continue
-        ratio = float(np.prod(later.to_numpy()))
+        raw = float(np.prod(later.to_numpy()))
         post = div[div.index > later.index.max()]
         if not post.empty:
             rel = amount / float(post.median())
-            # 分割前の配当が「分割比率ぶん大きい」より「同じくらい」に近ければ調整済みとみなす
-            if abs(math.log(rel)) <= abs(math.log(rel) - math.log(ratio)):
-                continue
-        out[t] = amount / ratio
+            factor = min((1.0, raw, 1 / raw), key=lambda f: abs(math.log(rel) - math.log(f)))
+        else:
+            factor = max(raw, 1 / raw)
+        out[t] = amount / factor
     return out
 
 
@@ -254,6 +255,35 @@ def dividend_yield(d: pd.DataFrame):
     total = div[div.index > since].sum()
     last = d["Close"].iloc[-1]
     return r(total / last * 100, 2) if last > 0 else None
+
+
+DIV_CHECK = ROOT / "div_check.csv"
+
+
+def write_div_check(tickers: pd.DataFrame, prices: dict[str, pd.DataFrame]):
+    """配当利回りの確認用: 利回り上位と、直近2年に分割がある銘柄の元データを出力"""
+    names = dict(zip(tickers["code"], tickers["name"]))
+    out = []
+    for code, d in prices.items():
+        d = d.tail(520)
+        sp = d["Stock Splits"][(d["Stock Splits"] > 0) & (d["Stock Splits"] != 1)] if "Stock Splits" in d else pd.Series(dtype=float)
+        dv = d["Dividends"][d["Dividends"] > 0] if "Dividends" in d else pd.Series(dtype=float)
+        close = float(d["Close"].iloc[-1])
+        since = d.index[-1] - pd.Timedelta(days=355)
+        raw = dv[dv.index > since].sum() / close * 100 if close > 0 else 0
+        adj = dividend_yield(d) or 0
+        out.append({
+            "code": code, "name": names.get(code, ""), "close": round(close, 1),
+            "dy_raw": round(raw, 2), "dy_adj": adj,
+            "divs": " ".join(f"{i:%Y-%m-%d}:{v:g}" for i, v in dv.items()),
+            "splits": " ".join(f"{i:%Y-%m-%d}:{v:g}" for i, v in sp.items()),
+        })
+    df = pd.DataFrame(out)
+    if df.empty:
+        return
+    pick = df[(df["dy_adj"] >= 4) | (df["dy_raw"] >= 4) | (df["splits"] != "")]
+    pick.sort_values("dy_adj", ascending=False).to_csv(DIV_CHECK, index=False)
+    print(f"div_check.csv: {len(pick)}行 / 利回り4%以上 {int((df['dy_adj'] >= 4).sum())}銘柄")
 
 
 def calc(d: pd.DataFrame) -> dict | None:
@@ -353,6 +383,10 @@ def main():
         shutil.rmtree(SITE)
     SITE.mkdir()
     out = build(tickers, prices)
+    try:
+        write_div_check(tickers, prices)
+    except Exception as e:  # noqa: BLE001
+        print(f"div_check.csv の作成に失敗: {e}")
     for f in ("index.html", "icon.png"):
         shutil.copy(ROOT / f, SITE / f)
     DATA_JSON.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
