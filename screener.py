@@ -215,11 +215,12 @@ def r(x, nd=2):
 def adjusted_dividends(d: pd.DataFrame) -> pd.Series:
     """
     株式分割の調整をした配当金を返す。
-    Yahooの株価は分割後の基準に揃えられているが、分割前の配当は調整されていないことがある。
-    また日本株では分割比率が逆向き(3分割が 1/3)で届くことがあるため、向きは次のように決める。
-    - 分割後にも配当がある: 分割前の配当を「そのまま / 比率で割る / 比率を掛ける」の3通りで
-      分割後の配当と比べ、一番近いものを採用(調整済みならそのまま)
-    - 分割後の配当がまだない: 株式分割(株数が増える)とみなし、配当を小さくする方向に調整
+    実データでの傾向: Yahooは分割より前の配当は分割後の基準に調整済みだが、
+    分割の効力発生日と同じ日に権利落ちした配当は、分割前の金額のまま入っていることが多い。
+    銘柄ごとに状況が違うため、配当ごとに
+    基準となる配当に近いほうを選ぶ(調整漏れは金額が大きすぎる方向なので「割る」か「そのまま」の2択)。
+      基準: 最後の分割より後の配当(確実に今の基準)。なければ、その他の配当の中央値。
+      基準がない(配当が1回だけ等): 分割と同じ日の配当だけ比率で割る。
     """
     div = d["Dividends"] if "Dividends" in d.columns else pd.Series(0.0, index=d.index)
     div = div[div > 0].copy()
@@ -229,32 +230,52 @@ def adjusted_dividends(d: pd.DataFrame) -> pd.Series:
     splits = splits[(splits > 0) & (splits != 1)]
     if splits.empty:
         return div
+    post = div[div.index > splits.index.max()]
     out = div.copy()
     for t, amount in div.items():
-        later = splits[splits.index > t]
+        later = splits[splits.index >= t]  # 分割の効力発生日と権利落ち日が同じ日のことが多い
         if later.empty:
             continue
         raw = float(np.prod(later.to_numpy()))
-        post = div[div.index > later.index.max()]
-        if not post.empty:
-            rel = amount / float(post.median())
-            factor = min((1.0, raw, 1 / raw), key=lambda f: abs(math.log(rel) - math.log(f)))
+        ref = post if not post.empty else div.drop(t)
+        if ref.empty:
+            factor = max(raw, 1 / raw) if t in later.index else 1.0
         else:
-            factor = max(raw, 1 / raw)
+            rel = amount / float(ref.median())
+            big = max(raw, 1 / raw)
+            # 調整漏れは「金額が大きすぎる」方向にしか起きないので、割るかそのままかの2択
+            factor = min((1.0, big), key=lambda f: abs(math.log(rel) - math.log(f)))
         out[t] = amount / factor
     return out
 
 
 def dividend_yield(d: pd.DataFrame):
-    """配当利回り(実績): 直近約1年(355日)に権利落ちした配当(分割調整後)の合計 ÷ 終値。
-    年2回配当の権利落ち日が年ごとに数日ずれても二重に数えないよう、365日より少し短くしている。"""
+    """
+    配当利回り(実績): 直近約1年(355日)に権利落ちした配当(分割調整後)の合計 ÷ 終値。
+    年2回配当の権利落ち日が年ごとに数日ずれても二重に数えないよう、365日より少し短くしている。
+    戻り値: (利回り%, 一時的な配当の疑いフラグ)
+      フラグ = 直近1年の配当のどれかが、1年前の同じ時期の配当の2.5倍超
+               (1年前がなければ、他の配当の中央値の3倍超)。記念配当・特別配当やデータの誤りの目安。
+    """
     if len(d) == 0:
-        return None
+        return None, False
     div = adjusted_dividends(d)
     since = d.index[-1] - pd.Timedelta(days=355)
-    total = div[div.index > since].sum()
+    win = div[div.index > since]
     last = d["Close"].iloc[-1]
-    return r(total / last * 100, 2) if last > 0 else None
+    if last <= 0:
+        return None, False
+    flag = False
+    for t, v in win.items():
+        prev = div[(div.index >= t - pd.Timedelta(days=410)) & (div.index <= t - pd.Timedelta(days=320))]
+        if len(prev):
+            if v > 2.5 * float(prev.iloc[-1]):
+                flag = True
+        else:
+            others = div.drop(t)
+            if len(others) and v > 3 * float(others.median()):
+                flag = True
+    return r(win.sum() / last * 100, 2), flag
 
 
 DIV_CHECK = ROOT / "div_check.csv"
@@ -271,10 +292,11 @@ def write_div_check(tickers: pd.DataFrame, prices: dict[str, pd.DataFrame]):
         close = float(d["Close"].iloc[-1])
         since = d.index[-1] - pd.Timedelta(days=355)
         raw = dv[dv.index > since].sum() / close * 100 if close > 0 else 0
-        adj = dividend_yield(d) or 0
+        adj, flag = dividend_yield(d)
+        adj = adj or 0
         out.append({
             "code": code, "name": names.get(code, ""), "close": round(close, 1),
-            "dy_raw": round(raw, 2), "dy_adj": adj,
+            "dy_raw": round(raw, 2), "dy_adj": adj, "flag": int(flag),
             "divs": " ".join(f"{i:%Y-%m-%d}:{v:g}" for i, v in dv.items()),
             "splits": " ".join(f"{i:%Y-%m-%d}:{v:g}" for i, v in sp.items()),
         })
@@ -298,6 +320,7 @@ def calc(d: pd.DataFrame) -> dict | None:
     high20_prev = h.iloc[-21:-1].max()
     high52_prev = h.iloc[-251:-1].max()
     high52 = h.iloc[-250:].max()
+    dy, dyx = dividend_yield(d)
     return {
         "price": r(last, 1),
         "chg": r((last / prev - 1) * 100),
@@ -314,7 +337,8 @@ def calc(d: pd.DataFrame) -> dict | None:
         "h52": bool(last > high52_prev) if len(h) >= 120 else None,    # 52週高値更新(終値)
         "f52": r((last / high52 - 1) * 100),                           # 52週高値からの距離
         "rsi": r(rsi(c), 1),
-        "dy": dividend_yield(d),
+        "dy": dy,
+        "dyx": bool(dyx),       # 一時的な配当(記念・特別配当など)の疑い
         "date": d.index[-1].strftime("%Y-%m-%d"),
     }
 
